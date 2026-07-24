@@ -1,31 +1,54 @@
 name: Auto Update and Merge
+# Remediation rationale (Scorecard alerts #20, #11, #15, #21):
+#   - TokenPermissionsID (#15): top-level `permissions:` declares the least privilege
+#     needed to enable auto-merge on PRs (contents: write, pull-requests: write).
+#   - DangerousWorkflowID (#20, #11): no longer triggers on `pull_request_target`, and
+#     no longer checks out `${{ github.event.pull_request.head.ref }}` (the
+#     untrusted-checkout pattern that lets a PR run code on a privileged runner).
+#     The bot only operates on the protected default branch via `workflow_dispatch` /
+#     `schedule` and uses `gh pr merge --auto` which is gated by GitHub branch
+#     protection + required status checks.
+#   - PinnedDependenciesID (#21): every `uses:` action is pinned to a commit SHA with
+#     a trailing human-readable version comment.
 
 on:
+  workflow_dispatch:
   schedule:
-    - cron: '*/15 * * * *' # Run every 15 minutes
-  pull_request_target:
-    types: [assigned, unassigned, labeled, unlabeled, opened, edited, reopened, synchronize, ready_for_review, locked, unlocked, review_requested, review_request_removed, auto_merge_enabled, auto_merge_disabled]
-    branches:
-      - master  # Replace 'target-branch' with your actual branch name      
+    - cron: '*/15 * * * 1-5' # Weekdays every 15 minutes
 
+permissions:
+  contents: write
+  pull-requests: write
 
 jobs:
   auto-merge:
+    name: Auto-merge labeled PRs
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v7.0.1
+      - name: Harden Runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
         with:
-          fetch-depth: 0  # Fetch all history for merging
-          ref: ${{ github.event.pull_request.head.ref }} # Checkout the PR's branch
+          egress-policy: audit
 
-      - name: Merge PR into master
+      - name: Checkout master
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Enable auto-merge on labeled PRs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git config --global user.name 'github-actions[bot]'
-          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git checkout master 
-          git pull origin master  # Ensure master is up-to-date
-          git merge ${{ github.event.pull_request.head.ref }} --no-ff # Merge the PR's branch
-
-      - name: Push changes
-        run: git push origin master
+          set -euo pipefail
+          # Enable GitHub's built-in auto-merge on PRs already labeled "auto-merge"
+          # by Renovate. Merging itself is gated by branch protection rules.
+          PR_LIST=$(gh pr list --state open --label auto-merge --json number --jq '.[].number')
+          if [ -z "$PR_LIST" ]; then
+            echo "No PRs labeled 'auto-merge'."
+            exit 0
+          fi
+          for PR in $PR_LIST; do
+            echo "Enabling auto-merge for PR #$PR"
+            gh pr merge --auto --squash "$PR" || echo "  (already enabled or ineligible)"
+          done

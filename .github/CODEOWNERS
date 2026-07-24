@@ -1,0 +1,5 @@
+# CODEOWNERS — Remediation rationale (Scorecard CITestsID / Code-Review requirement)
+# Require at least one owner review on every change to the repo. @joseguzman1337
+# is the sole maintainer; this file is needed so branch-protection can enforce
+# `require_code_owner_reviews: true`.
+*       @joseguzman1337
